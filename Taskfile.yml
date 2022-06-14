@@ -1,69 +1,20 @@
-version: 2.6
+version: 3
 
 silent: false
 
 vars:
-  DOCKER_REGISTRY:
-    sh: grep "DOCKER_REGISTRY" .env | cut -d = -f 2
-  APP_NAME:
-    sh: grep "APP_NAME" .env | cut -d = -f 2
-  YII_ENV:
-    sh: grep "YII_ENV" .env | cut -d = -f 2
-  APP_NAME_FULL:
-    sh: echo '{{if .DOCKER_REGISTRY}}{{.DOCKER_REGISTRY}}/{{.APP_NAME}}{{else}}{{.APP_NAME}}{{end}}'
-  BRANCH_DEFAULT: master
-  BRANCH_CURRENT:
-    sh: git branch | grep '\*' | cut -d ' ' -f2 | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]'
+  dockerfileOverride:
+    sh: \[ -f ./docker-compose.override.yml \] && echo '-f docker-compose.override.yml' || echo ''
 
 tasks:
-  docker:login:
-    cmds:
-      - docker login {{.DOCKER_REGISTRY}}
-
-  docker:pull:
-    depends: [docker:login]
-    cmds:
-      - docker pull {{.APP_NAME_FULL}}:{{.BRANCH_CURRENT}}
-
-  docker:build:
-    cmds:
-      - docker build -t {{.APP_NAME_FULL}}:{{.BRANCH_CURRENT}} -f .docker/php/Dockerfile ./src
-      - if test "{{.BRANCH_CURRENT}}" = "{{.BRANCH_DEFAULT}}";
-          then docker tag {{.APP_NAME_FULL}}:{{.BRANCH_CURRENT}} {{.APP_NAME_FULL}}:latest;
-        fi
-
-  docker:tag:
-    vars:
-      TAGS:
-        sh: git tag --points-at HEAD
-    cmds:
-      - for a_tag in {{.TAGS}} ; do
-          echo "Tagging image '{{.APP_NAME}}' with tag '$$a_tag'";
-          docker tag {{.APP_NAME_FULL}}:{{.BRANCH_CURRENT}} {{.APP_NAME}}:$$a_tag ;
-        done
-
-  docker:push:
-    depends: [docker:login]
-    cmds:
-      - docker push {{.APP_NAME_FULL}}
-
-  publish:
-    cmds:
-      - task: docker:build
-      - task: docker:tag
-      - task: docker:push
-
   up:
     env:
-      BUILD_TAG:
-        sh: echo {{.BRANCH_CURRENT}}
       USER_ID:
         sh: id -u
       GROUP_ID:
         sh: id -g
     cmds:
-      - task: docker:pull
-      - docker-compose up -d --remove-orphans
+      - docker-compose -f ./docker-compose.yml {{.dockerfileOverride}} up -d --remove-orphans
     status:
       - docker-compose exec -T php echo ''
 
@@ -71,73 +22,122 @@ tasks:
     cmds:
       - docker-compose down
 
+  run:
+    env:
+      USER_ID:
+        sh: id -u
+      GROUP_ID:
+        sh: id -g
+    cmds:
+      - docker-compose -f ./docker-compose.yml {{.dockerfileOverride}} run --rm {{if .workdir}}-w {{.workdir}}{{end}} {{if .envvars}}{{.envvars}}{{end}} {{.service}} {{if .CLI_ARGS}}{{.CLI_ARGS}}{{end}}
+
   php:restart:
     cmds:
       - docker-compose restart php
 
-  php:server:
-    deps: [up]
+  php:psalm:
+    deps: [ up ]
+    ignore_error: true
     cmds:
-      - docker-compose exec -d php php -S localhost:8080 -t api/web/
+      - docker-compose exec php php vendor/bin/psalm
 
-  php:behat:
-    deps: [php:server, yii:migrate:fresh]
+  php:unit:
+    deps: [ up ]
     cmds:
-      - docker-compose exec php php vendor/bin/behat
+      - docker-compose exec php php vendor/bin/phpunit
+
+  php:infection:
+    deps: [ up ]
+    cmds:
+      - docker-compose exec -e XDEBUG_MODE=coverage php php vendor/bin/roave-infection-static-analysis-plugin --only-covered
 
   php:test:
     cmds:
-      - task: php:behat
+      - task: php:psalm
         ignore_error: true
-      - task: down
+      - task: php:unit
+      - task: php:infection
 
   php:exec:
     deps: [up]
     cmds:
-      - docker-compose exec php {{.c}}
+      - docker-compose exec php {{.CLI_ARGS}}
 
   php:run:
+    desc: Run the given command in a php container (run --rm).
+    summary: |
+      Run the given command in an php container (run --rm). You can use these parameters:
+        - xdebug - the container will be run with the given xdebug mode (e.g. "off" or "debug")
+      Example: task xdebug=coverage php:run -- vendor/bin/phpunit
     cmds:
-      - docker-compose run --rm php {{.c}}
-
-  php:yii:
-    cmds:
-      - task: php:exec
+      - task: run
         vars:
-          c: php ./yii {{if .c}}{{.c}}{{end}}
+          service: php
+          envvars: "{{if .envvars}}{{.envvars}}{{end}} {{if .xdebug}}-e XDEBUG_MODE={{.xdebug}}{{end}}"
+          CLI_ARGS: "{{.CLI_ARGS}}"
+
+  yii:
+    cmds:
+      - task: php:run
+        vars:
+          CLI_ARGS: php ./yii {{if .CLI_ARGS}}{{.CLI_ARGS}}{{end}}
 
   yii:migrate:
     cmds:
-      - task: php:yii
+      - task: yii
         vars:
-          c: migrate --interactive=0
+          CLI_ARGS: migrate --interactive=0
 
   yii:migrate:fresh:
     cmds:
-      - task: php:yii
+      - task: yii
         vars:
-          c: migrate/fresh --interactive=0
+          CLI_ARGS: migrate:fresh --interactive=0
 
-  composer:install:
+  composer:i:
     cmds:
       - task: php:run
         vars:
-          c: composer install
+          CLI_ARGS: composer install
 
-  composer:update:
+  composer:u:
     cmds:
       - task: php:run
         vars:
-          c: composer update
+          CLI_ARGS: composer update {{if .CLI_ARGS}}{{.CLI_ARGS}}{{end}}
 
-  composer:require:
+  composer:rq:
     cmds:
-      - task: php:exec
+      - task: php:run
         vars:
-          c: composer require {{.c}}
+          CLI_ARGS: composer require {{.CLI_ARGS}}
 
-  composer:remove:
+  composer:rm:
     cmds:
-      - task: php:exec
+      - task: php:run
         vars:
-          c: composer remove {{.c}}
+          CLI_ARGS: composer remove {{.CLI_ARGS}}
+
+  composer:yii-cfg:
+    cmds:
+      - task: php:run
+        vars:
+          CLI_ARGS: composer yii-config-rebuild
+
+  prod:up:
+    env:
+      USER_ID:
+        sh: id -u
+      GROUP_ID:
+        sh: id -g
+    cmds:
+      - docker-compose -f docker-compose.prod.yml up -d --remove-orphans
+    status:
+      - docker-compose -f docker-compose.prod.yml exec -T php echo ''
+
+  prod:u:
+    cmds:
+      - git pull
+      - docker-compose -f docker-compose.prod.yml pull php
+      - docker-compose -f docker-compose.prod.yml up -d --remove-orphans
+      - docker-compose -f docker-compose.prod.yml run --rm php ./yii migrate/up

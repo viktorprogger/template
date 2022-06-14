@@ -1,2 +1,4 @@
 .env
 .idea
+.docker/data
+!.docker/data/composer/.gitkeep
