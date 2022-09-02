@@ -71,8 +71,8 @@
             "source-directory": "config"
         },
         "config-plugin": {
-            "common": "common.php",
-            "params": "params.php",
+            "common": "common/*.php",
+            "params": "params/*.php",
             "web": [
                 "$common",
                 "web.php"
@@ -91,10 +91,10 @@
         },
         "config-plugin-environments": {
             "dev": {
-                "params": "params-dev.php"
+                "params": "environment/dev/params.php"
             },
             "prod": {
-                "params": "params-prod.php"
+                "params": "environment/prod/params.php"
             }
         }
     }

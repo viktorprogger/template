@@ -6,7 +6,7 @@ use Yiisoft\Yii\Cycle\Schema\Provider\PhpFileSchemaProvider;
 
 return [
     'yiisoft/router-fastroute' => [
-        'enableCache' => true,
+        'enableCache' => false,
     ],
     'yiisoft/yii-cycle' => [
         /**
